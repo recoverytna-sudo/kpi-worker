@@ -175,7 +175,20 @@ module.exports = async (req, res) => {
 
       const timestamp = `${month}/${day}/${year} ${hours}:${minutes}:${seconds}`;
 
-      const appendValues = [[timestamp, date, serviceId, customerName, financeName, financeId, reason, duplicateReason || ""]];
+      // 📅 Date ကို YYYY-MM-DD ပုံစံအတိုင်း သေချာစေရေး
+      let formattedDate = date;
+      const dateParts = String(date).trim().split('-');
+      if (dateParts.length === 3) {
+        const yyyy = dateParts[0];
+        const mm = String(dateParts[1]).padStart(2, '0');
+        const dd = String(dateParts[2]).padStart(2, '0');
+        formattedDate = `${yyyy}-${mm}-${dd}`;
+      }
+
+      // Single quote (') ခံပြီး ရေးသွင်းခြင်းဖြင့် Google Sheet က auto format မပြောင်းတော့ပါ
+      const sheetDate = "'" + formattedDate;
+
+      const appendValues = [[timestamp, sheetDate, serviceId, customerName, financeName, financeId, reason, duplicateReason || ""]];
 
       await sheets.spreadsheets.values.append({
         spreadsheetId: SHEET_ID_KPI,
