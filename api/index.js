@@ -4,8 +4,27 @@ const jsonResponse = (res, statusCode, data) => {
   res.status(statusCode).json(data);
 };
 
+// Google Sheet ထဲရှိ Tab နာမည်ကို အလိုအလျောက် ရှာဖွေပေးသည့် Helper Function
+async function getTabTitle(sheets, spreadsheetId, preferredName) {
+  try {
+    const meta = await sheets.spreadsheets.get({ spreadsheetId });
+    const sheetList = meta.data.sheets || [];
+    
+    const matched = sheetList.find(s => 
+      s.properties.title.trim().toLowerCase() === preferredName.trim().toLowerCase()
+    );
+    if (matched) {
+      return matched.properties.title;
+    }
+    
+    if (sheetList.length > 0) {
+      return sheetList[0].properties.title;
+    }
+  } catch (e) {}
+  return preferredName;
+}
+
 module.exports = async (req, res) => {
-  // CORS Headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -46,30 +65,26 @@ module.exports = async (req, res) => {
         }
 
         try {
+          const empTab = await getTabTitle(sheets, SHEET_ID_EMP, "Mgr Fb-30%");
           const empRes = await sheets.spreadsheets.values.get({
             spreadsheetId: SHEET_ID_EMP,
-            range: "'Mgr Fb-30%'!A2:B3000",
+            range: `'${empTab}'!A2:B3000`,
             valueRenderOption: 'FORMATTED_VALUE'
           });
 
           const rows = empRes.data.values || [];
-          
-          // ရှာဖွေမည့် ID မှ ဂဏန်း/စာသားသီးသန့် စစ်ထုတ်ခြင်း
           const cleanSearch = searchId.replace(/[^0-9a-zA-Z]/g, '').toLowerCase();
 
           for (let i = 0; i < rows.length; i++) {
             const rawName = rows[i][0] ? String(rows[i][0]).trim() : "";
             const rawId = rows[i][1] ? String(rows[i][1]).trim() : "";
 
-            // Sheet ထဲရှိ Column B (ID) မှ ကော်မာနှင့် သင်္ကေတများ ရှင်းလင်းခြင်း
             const cleanIdCol = rawId.replace(/[^0-9a-zA-Z]/g, '').toLowerCase();
             const cleanNameCol = rawName.replace(/[^0-9a-zA-Z]/g, '').toLowerCase();
 
-            // ID ဖြင့် ရှာဖွေခြင်း
             if (cleanIdCol === cleanSearch && cleanSearch !== "") {
               return jsonResponse(res, 200, { status: "success", id: searchId, name: rawName });
             }
-            // Name ဖြင့် ရှာဖွေခြင်း
             if (cleanNameCol === cleanSearch && cleanSearch !== "") {
               return jsonResponse(res, 200, { status: "success", id: searchId, name: rawId });
             }
@@ -100,11 +115,13 @@ module.exports = async (req, res) => {
         return jsonResponse(res, 200, { status: "error", message: "လိုအပ်သော Parameter များ မပါဝင်ပါ။" });
       }
 
+      const kpiTab = await getTabTitle(sheets, SHEET_ID_KPI, "KPI Calculation");
+
       const kpiRes = await sheets.spreadsheets.values.get({
         spreadsheetId: SHEET_ID_KPI,
-        range: "'KPI Calculation'!A:F"
+        range: `'${kpiTab}'!A:F`
       }).catch((err) => {
-        throw new Error("KPI Sheet ဖတ်မရပါ။ Tab နာမည် 'KPI Calculation' ဟုတ်မဟုတ် စစ်ဆေးပါ။ Error: " + err.message);
+        throw new Error("KPI Sheet ဖတ်မရပါ။ Error: " + err.message);
       });
 
       const allRows = kpiRes.data.values || [];
@@ -146,12 +163,23 @@ module.exports = async (req, res) => {
         return jsonResponse(res, 200, { status: "duplicate_prompt", message: msg });
       }
 
-      const timestamp = new Date().toISOString();
+      // 🇲🇲 မြန်မာစံတော်ချိန် (UTC+6:30) ဖြင့် Timestamp ပြုလုပ်ခြင်း
+      const now = new Date();
+      const mmTime = new Date(now.getTime() + (6.5 * 60 * 60 * 1000));
+      const month = mmTime.getUTCMonth() + 1;
+      const day = mmTime.getUTCDate();
+      const year = mmTime.getUTCFullYear();
+      const hours = mmTime.getUTCHours();
+      const minutes = String(mmTime.getUTCMinutes()).padStart(2, '0');
+      const seconds = String(mmTime.getUTCSeconds()).padStart(2, '0');
+
+      const timestamp = `${month}/${day}/${year} ${hours}:${minutes}:${seconds}`;
+
       const appendValues = [[timestamp, date, serviceId, customerName, financeName, financeId, reason, duplicateReason || ""]];
 
       await sheets.spreadsheets.values.append({
         spreadsheetId: SHEET_ID_KPI,
-        range: "'KPI Calculation'!A1",
+        range: `'${kpiTab}'!A1`,
         valueInputOption: 'USER_ENTERED',
         resource: { values: appendValues }
       });
