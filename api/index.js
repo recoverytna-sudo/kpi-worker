@@ -1,8 +1,5 @@
 const { google } = require('googleapis');
 
-// -------------------------------------------------------------------------
-// Helper Function: Respond JSON
-// -------------------------------------------------------------------------
 const jsonResponse = (res, statusCode, data) => {
   res.status(statusCode).json(data);
 };
@@ -18,24 +15,28 @@ module.exports = async (req, res) => {
   }
 
   try {
+    // PRIVATE_KEY ပုံစံမှန်အောင် ပြုပြင်ခြင်း
+    let privateKey = process.env.PRIVATE_KEY || '';
+    if (privateKey.startsWith('"') && privateKey.endsWith('"')) {
+      privateKey = privateKey.slice(1, -1);
+    }
+    privateKey = privateKey.replace(/\\n/g, '\n');
+
     // Google Service Account Authentication
     const auth = new google.auth.JWT(
       process.env.CLIENT_EMAIL,
       null,
-      process.env.PRIVATE_KEY ? process.env.PRIVATE_KEY.replace(/\\n/g, '\n') : '',
+      privateKey,
       ['https://www.googleapis.com/auth/spreadsheets']
     );
 
     const sheets = google.sheets({ version: 'v4', auth });
     
-    // Environment Variables မှ Sheet IDs ယူခြင်း
     const SHEET_ID_KPI = process.env.SHEET_ID_KPI;
     const SHEET_ID_EMP = process.env.SHEET_ID_EMP;
-    const SHEET_NAME_KPI = "KPI Calculation";
-    const SHEET_NAME_EMP = "Mgr Fb-30%";
 
     // =========================================================================
-    // 🌟 GET REQUEST HANDLER (Employee Lookup)
+    // 🌟 GET REQUEST (Employee ID Lookup)
     // =========================================================================
     if (req.method === 'GET') {
       const { action, id } = req.query;
@@ -47,10 +48,10 @@ module.exports = async (req, res) => {
         }
 
         try {
-          // Employee Sheet မှ Data ဆွဲယူခြင်း
+          // ✅ Sheet နာမည်တွင် Space သို့မဟုတ် Special Character ပါသဖြင့် single quotes '...' ဖြင့် အုပ်ရပါမည်
           const empRes = await sheets.spreadsheets.values.get({
             spreadsheetId: SHEET_ID_EMP,
-            range: `${SHEET_NAME_EMP}!A2:B1000`
+            range: "'Mgr Fb-30%'!A2:B1000"
           });
 
           const rows = empRes.data.values || [];
@@ -69,31 +70,35 @@ module.exports = async (req, res) => {
           return jsonResponse(res, 200, { status: "error", message: "Employee ID မရှိသေးပါ" });
 
         } catch (e) {
-          return jsonResponse(res, 200, { status: "error", message: "Employee Sheet ကို ဖတ်မရပါ။ Access ပေးထားခြင်း ရှိ/မရှိ စစ်ဆေးပါ။" });
+          return jsonResponse(res, 200, { status: "error", message: "Employee Sheet Error: " + e.message });
         }
       }
 
-      return jsonResponse(res, 200, { status: "running", message: "Vercel API is working!" });
+      return jsonResponse(res, 200, { status: "running", message: "Vercel KPI API is active!" });
     }
 
     // =========================================================================
-    // 🌟 POST REQUEST HANDLER (KPI Submission & Duplicate Check)
+    // 🌟 POST REQUEST (KPI Submission & Duplicate Check)
     // =========================================================================
     if (req.method === 'POST') {
-      const { date, serviceId, customerName, financeName, financeId, reason, duplicateReason, isConfirmed } = req.body;
+      // Body ကို Safe Parse လုပ်ခြင်း
+      let bodyData = req.body;
+      if (typeof bodyData === 'string') {
+        try { bodyData = JSON.parse(bodyData); } catch (e) {}
+      }
+
+      const { date, serviceId, customerName, financeName, financeId, reason, duplicateReason, isConfirmed } = bodyData || {};
 
       if (!date || !serviceId || !financeName) {
         return jsonResponse(res, 200, { status: "error", message: "လိုအပ်သော Parameter များ မပါဝင်ပါ။" });
       }
 
-      // 1. KPI Sheet မှ ဒေတာများကို ဆွဲယူ၍ Duplicate စစ်ဆေးခြင်း
+      // ✅ Single quotes '...' ဖြင့် အုပ်ထားသော Range သုံးထားပါသည်
       const kpiRes = await sheets.spreadsheets.values.get({
         spreadsheetId: SHEET_ID_KPI,
-        range: `${SHEET_NAME_KPI}!A:F`
-      }).catch(async (err) => {
-        // Sheet မရှိသေးပါက Error တက်မည်။ (ဒီနေရာမှာ Vercel မှနေ၍ Sheet အသစ်ဆောက်မပေးနိုင်ပါ။)
-        // ထို့ကြောင့် Google Sheet ဘက်တွင် 'KPI Calculation' အမည်ဖြင့် Tab တစ်ခု ကြိုတင်ဆောက်ထားရန် လိုအပ်ပါသည်။
-        throw new Error("KPI Calculation Sheet ကို ဖတ်မရပါ။ Sheet နာမည် မှန်ကန်မှု ရှိ/မရှိ စစ်ဆေးပါ။");
+        range: "'KPI Calculation'!A:F"
+      }).catch((err) => {
+        throw new Error("KPI Sheet ဖတ်မရပါ။ 'KPI Calculation' အမည်ဖြင့် Tab ရှိ/မရှိ စစ်ဆေးပါ။ Error: " + err.message);
       });
 
       const allRows = kpiRes.data.values || [];
@@ -103,7 +108,6 @@ module.exports = async (req, res) => {
       let otherFinances = [];
       const inputDate = new Date(date).toDateString();
 
-      // နောက်ဆုံး Row 400 ကိုပဲ စစ်ဆေးမည်
       const startIndex = Math.max(1, allRows.length - 400);
 
       for (let i = startIndex; i < allRows.length; i++) {
@@ -111,14 +115,12 @@ module.exports = async (req, res) => {
         if (row[1]) {
           const rowDate = new Date(row[1]).toDateString();
 
-          // Same Date နှင့် Same Service ID တူနေလျှင်
           if (rowDate === inputDate && String(row[2]).trim() === String(serviceId).trim()) {
             count++;
             
             const savedFinanceName = row[4] ? String(row[4]).trim() : "";
             const savedFinanceId = row[5] ? String(row[5]).trim() : "";
             
-            // အခြား Finance က တင်ထားတာ ဖြစ်လျှင်
             if (savedFinanceId !== String(financeId).trim()) {
               if (savedFinanceName && !otherFinances.includes(savedFinanceName)) {
                 otherFinances.push(savedFinanceName);
@@ -128,7 +130,7 @@ module.exports = async (req, res) => {
         }
       }
 
-      // Duplicate တွေ့ရှိပါက Prompt တောင်းမည်
+      // Duplicate တွေ့ရှိပါက Prompt ပို့မည်
       if (count > 0 && !isConfirmMode) {
         let msg = "";
         if (otherFinances.length > 0) {
@@ -139,13 +141,13 @@ module.exports = async (req, res) => {
         return jsonResponse(res, 200, { status: "duplicate_prompt", message: msg });
       }
 
-      // 2. Duplicate မရှိလျှင် သို့မဟုတ် Confirm လုပ်ပြီးလျှင် Data သိမ်းမည်
+      // Data သိမ်းဆည်းမည်
       const timestamp = new Date().toISOString();
       const appendValues = [[timestamp, date, serviceId, customerName, financeName, financeId, reason, duplicateReason || ""]];
 
       await sheets.spreadsheets.values.append({
         spreadsheetId: SHEET_ID_KPI,
-        range: `${SHEET_NAME_KPI}!A1`,
+        range: "'KPI Calculation'!A1",
         valueInputOption: 'USER_ENTERED',
         resource: { values: appendValues }
       });
