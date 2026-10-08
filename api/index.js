@@ -15,14 +15,12 @@ module.exports = async (req, res) => {
   }
 
   try {
-    // PRIVATE_KEY ပုံစံမှန်အောင် ပြုပြင်ခြင်း
     let privateKey = process.env.PRIVATE_KEY || '';
     if (privateKey.startsWith('"') && privateKey.endsWith('"')) {
       privateKey = privateKey.slice(1, -1);
     }
     privateKey = privateKey.replace(/\\n/g, '\n');
 
-    // Google Service Account Authentication
     const auth = new google.auth.JWT(
       process.env.CLIENT_EMAIL,
       null,
@@ -48,22 +46,32 @@ module.exports = async (req, res) => {
         }
 
         try {
-          // ✅ Sheet နာမည်တွင် Space သို့မဟုတ် Special Character ပါသဖြင့် single quotes '...' ဖြင့် အုပ်ရပါမည်
           const empRes = await sheets.spreadsheets.values.get({
             spreadsheetId: SHEET_ID_EMP,
-            range: "'Mgr Fb-30%'!A2:B1000"
+            range: "'Mgr Fb-30%'!A2:B3000",
+            valueRenderOption: 'FORMATTED_VALUE'
           });
 
           const rows = empRes.data.values || [];
-          for (let i = 0; i < rows.length; i++) {
-            const nameCol = rows[i][0] ? String(rows[i][0]).trim() : "";
-            const idCol = rows[i][1] ? String(rows[i][1]).trim() : "";
+          
+          // ရှာဖွေမည့် ID မှ ဂဏန်း/စာသားသီးသန့် စစ်ထုတ်ခြင်း
+          const cleanSearch = searchId.replace(/[^0-9a-zA-Z]/g, '').toLowerCase();
 
-            if (idCol === searchId) {
-              return jsonResponse(res, 200, { status: "success", id: searchId, name: nameCol });
+          for (let i = 0; i < rows.length; i++) {
+            const rawName = rows[i][0] ? String(rows[i][0]).trim() : "";
+            const rawId = rows[i][1] ? String(rows[i][1]).trim() : "";
+
+            // Sheet ထဲရှိ Column B (ID) မှ ကော်မာနှင့် သင်္ကေတများ ရှင်းလင်းခြင်း
+            const cleanIdCol = rawId.replace(/[^0-9a-zA-Z]/g, '').toLowerCase();
+            const cleanNameCol = rawName.replace(/[^0-9a-zA-Z]/g, '').toLowerCase();
+
+            // ID ဖြင့် ရှာဖွေခြင်း
+            if (cleanIdCol === cleanSearch && cleanSearch !== "") {
+              return jsonResponse(res, 200, { status: "success", id: searchId, name: rawName });
             }
-            if (nameCol === searchId) {
-              return jsonResponse(res, 200, { status: "success", id: searchId, name: idCol });
+            // Name ဖြင့် ရှာဖွေခြင်း
+            if (cleanNameCol === cleanSearch && cleanSearch !== "") {
+              return jsonResponse(res, 200, { status: "success", id: searchId, name: rawId });
             }
           }
           
@@ -81,7 +89,6 @@ module.exports = async (req, res) => {
     // 🌟 POST REQUEST (KPI Submission & Duplicate Check)
     // =========================================================================
     if (req.method === 'POST') {
-      // Body ကို Safe Parse လုပ်ခြင်း
       let bodyData = req.body;
       if (typeof bodyData === 'string') {
         try { bodyData = JSON.parse(bodyData); } catch (e) {}
@@ -93,12 +100,11 @@ module.exports = async (req, res) => {
         return jsonResponse(res, 200, { status: "error", message: "လိုအပ်သော Parameter များ မပါဝင်ပါ။" });
       }
 
-      // ✅ Single quotes '...' ဖြင့် အုပ်ထားသော Range သုံးထားပါသည်
       const kpiRes = await sheets.spreadsheets.values.get({
         spreadsheetId: SHEET_ID_KPI,
         range: "'KPI Calculation'!A:F"
       }).catch((err) => {
-        throw new Error("KPI Sheet ဖတ်မရပါ။ 'KPI Calculation' အမည်ဖြင့် Tab ရှိ/မရှိ စစ်ဆေးပါ။ Error: " + err.message);
+        throw new Error("KPI Sheet ဖတ်မရပါ။ Tab နာမည် 'KPI Calculation' ဟုတ်မဟုတ် စစ်ဆေးပါ။ Error: " + err.message);
       });
 
       const allRows = kpiRes.data.values || [];
@@ -130,7 +136,6 @@ module.exports = async (req, res) => {
         }
       }
 
-      // Duplicate တွေ့ရှိပါက Prompt ပို့မည်
       if (count > 0 && !isConfirmMode) {
         let msg = "";
         if (otherFinances.length > 0) {
@@ -141,7 +146,6 @@ module.exports = async (req, res) => {
         return jsonResponse(res, 200, { status: "duplicate_prompt", message: msg });
       }
 
-      // Data သိမ်းဆည်းမည်
       const timestamp = new Date().toISOString();
       const appendValues = [[timestamp, date, serviceId, customerName, financeName, financeId, reason, duplicateReason || ""]];
 
